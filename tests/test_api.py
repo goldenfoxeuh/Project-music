@@ -124,3 +124,9 @@ def test_unknown_link_returns_message():
         assert r.status_code == 400
         assert "non reconnu" in r.json()["error"]
         assert c.get("/").status_code == 200
+        # Application installable sur téléphone (PWA).
+        sw = c.get("/sw.js")
+        assert sw.status_code == 200 and "javascript" in sw.headers["content-type"]
+        manifest = c.get("/static/manifest.webmanifest").json()
+        assert manifest["display"] == "standalone" and manifest["icons"]
+        assert c.get("/healthz").json() == {"ok": True}

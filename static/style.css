@@ -146,6 +146,11 @@ select {
 .empty { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
 
 @media (max-width: 600px) {
+  body { padding-bottom: env(safe-area-inset-bottom); }
+  header { padding-top: max(20px, env(safe-area-inset-top)); }
+  .card { padding: 16px; }
+  .row > button, #match-btn, #sync-enable, #link-btn { width: 100%; }
+  input[type=text], select { font-size: 16px; } /* évite le zoom automatique sur iPhone */
   .matches thead { display: none; }
   .matches tr { display: grid; grid-template-columns: 28px 1fr; gap: 2px 6px; padding: 8px 0; border-bottom: 1px solid var(--border); }
   .matches td { border: 0; padding: 0; }

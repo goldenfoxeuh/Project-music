@@ -141,6 +141,19 @@ def create_app(
     async def index():
         return FileResponse(STATIC_DIR / "index.html")
 
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker():
+        # Servi à la racine pour pouvoir gérer toute l'application.
+        return FileResponse(
+            STATIC_DIR / "sw.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+        )
+
+    @app.get("/healthz", include_in_schema=False)
+    async def healthz():
+        return {"ok": True}
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     # ----------------------------------------------------------- plateformes

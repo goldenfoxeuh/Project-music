@@ -533,6 +533,11 @@ $("#sync-list").addEventListener("change", async (e) => {
 mountSyncForms();
 setInterval(loadSyncs, 60000);
 
+// Application installable sur l'écran d'accueil du téléphone.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
+
 // ---------------------------------------------------------------- démarrage
 (async function init() {
   const params = new URLSearchParams(location.search);

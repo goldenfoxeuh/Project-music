@@ -100,6 +100,46 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 Ouvre ensuite **http://127.0.0.1:8000** dans ton navigateur.
 
+## Sur ton téléphone 📱
+
+L'application s'installe sur l'écran d'accueil comme une vraie appli (icône, plein écran).
+Elle a besoin d'un serveur accessible en **HTTPS** (obligatoire pour les connexions Spotify / Google).
+
+### Option 1 — La mettre en ligne gratuitement (Render)
+
+1. Crée un compte sur [render.com](https://render.com) (connexion avec GitHub).
+2. **New → Blueprint**, choisis ce dépôt : Render lit `render.yaml` et construit l'appli.
+3. Une fois en ligne, note l'adresse (ex : `https://playlist-transfer.onrender.com`) et, dans
+   *Environment*, renseigne `BASE_URL` avec cette adresse, puis les clés des plateformes.
+4. Dans les consoles Spotify / Google / Deezer, ajoute les URI de redirection avec cette adresse :
+   `https://playlist-transfer.onrender.com/auth/spotify/callback` (idem `youtube`, `deezer`).
+
+⚠ L'offre gratuite de Render met l'appli en veille après 15 min sans visite et efface ses
+fichiers à chaque redémarrage : parfait pour **essayer**, mais les connexions et les
+synchronisations automatiques ne tiennent pas dans la durée. Pour la synchronisation, prends
+une offre avec disque persistant (monté sur `/data`) ou garde l'appli sur un ordinateur allumé.
+
+Le `Dockerfile` fonctionne aussi sur Fly.io, Railway, un NAS ou un Raspberry Pi.
+
+### Option 2 — Depuis ton ordinateur, pour un test rapide
+
+Lance l'appli sur ton ordinateur, puis crée une adresse HTTPS temporaire avec
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) :
+
+```bash
+uvicorn app.main:app --port 8000
+cloudflared tunnel --url http://localhost:8000     # affiche une adresse https://xxxx.trycloudflare.com
+```
+
+Mets cette adresse dans `BASE_URL` (fichier `.env`, puis relance l'appli) et dans les URI de
+redirection des plateformes. L'adresse change à chaque lancement du tunnel.
+
+### Installer l'icône sur l'écran d'accueil
+
+- **iPhone (Safari)** : ouvre l'adresse → bouton **Partager** → **Sur l'écran d'accueil**.
+- **Android (Chrome)** : ouvre l'adresse → menu **⋮** → **Installer l'application**
+  (ou « Ajouter à l'écran d'accueil »).
+
 ## Obtenir les clés
 
 Pour chaque plateforme, déclare l'URI de redirection `http://127.0.0.1:8000/auth/<plateforme>/callback`

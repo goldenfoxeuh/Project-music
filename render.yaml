@@ -1,0 +1,29 @@
+# Mise en ligne en un clic sur Render (https://render.com) : « New » → « Blueprint »
+# → choisis ce dépôt GitHub. Ensuite, renseigne BASE_URL et les clés des plateformes.
+services:
+  - type: web
+    name: playlist-transfer
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: BASE_URL
+        sync: false   # ex : https://playlist-transfer.onrender.com
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: DEEZER_APP_ID
+        sync: false
+      - key: DEEZER_APP_SECRET
+        sync: false
+      - key: APPLE_DEVELOPER_TOKEN
+        sync: false
+      - key: APPLE_STOREFRONT
+        value: fr

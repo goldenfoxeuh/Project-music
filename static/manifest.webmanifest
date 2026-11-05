@@ -1,0 +1,16 @@
+{
+  "name": "Playlist Transfer",
+  "short_name": "Playlists",
+  "description": "Copie et synchronise tes playlists entre Spotify, Deezer, YouTube Music et Apple Music.",
+  "lang": "fr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f6f8",
+  "theme_color": "#5b4bdb",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
