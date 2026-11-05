@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 from urllib.parse import quote
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,9 +18,11 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import Settings
 from .links import resolve_link
-from .models import AuthRequired, Playlist, ProviderError
+from .models import AuthRequired, Playlist, PlaylistRef, ProviderError
 from .providers import build_providers
 from .providers.apple import AppleMusicProvider
+from .storage import Database, SyncStore, TokenStore
+from .sync import MODES, Side, Sync, SyncRunner, track_key
 from .transfer import JobStore, run_matching, unique_ids
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -42,28 +45,48 @@ class CreateBody(BaseModel):
     track_ids: list[str]
 
 
-class TokenStore:
-    """Jetons de connexion, gardés en mémoire côté serveur (jamais dans le cookie)."""
-
-    def __init__(self):
-        self._data: dict[str, dict[str, dict]] = {}
-
-    def get(self, sid: str, platform: str) -> dict | None:
-        return self._data.get(sid, {}).get(platform)
-
-    def set(self, sid: str, platform: str, token: dict) -> None:
-        self._data.setdefault(sid, {})[platform] = token
-
-    def delete(self, sid: str, platform: str) -> None:
-        self._data.get(sid, {}).pop(platform, None)
+class SyncOptions(BaseModel):
+    mode: str = "one_way"
+    interval_hours: float = 6
+    propagate_deletions: bool = True
 
 
-def create_app(settings: Settings | None = None, http: httpx.AsyncClient | None = None) -> FastAPI:
+class SyncFromJob(SyncOptions):
+    job_id: str
+
+
+class SyncFromLinks(SyncOptions):
+    url_a: str
+    url_b: str
+
+
+class SyncUpdate(BaseModel):
+    mode: str | None = None
+    interval_hours: float | None = None
+    propagate_deletions: bool | None = None
+    enabled: bool | None = None
+
+
+def _check_options(mode: str | None, interval: float | None) -> None:
+    if mode is not None and mode not in MODES:
+        raise ProviderError("Mode de synchronisation inconnu.")
+    if interval is not None and not (0.25 <= interval <= 24 * 30):
+        raise ProviderError("L'intervalle doit être compris entre 15 minutes et 30 jours.")
+
+
+def create_app(
+    settings: Settings | None = None,
+    http: httpx.AsyncClient | None = None,
+    db: Database | None = None,
+) -> FastAPI:
     settings = settings or Settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if settings.sync_enabled:
+            app.state.sync_runner.start()
         yield
+        await app.state.sync_runner.stop()
         await app.state.http.aclose()
 
     app = FastAPI(title="Playlist Transfer", lifespan=lifespan)
@@ -71,19 +94,27 @@ def create_app(settings: Settings | None = None, http: httpx.AsyncClient | None 
         SessionMiddleware,
         secret_key=settings.secret_key,
         same_site="lax",
+        max_age=365 * 24 * 3600,  # les synchronisations sont liées à cette session
         https_only=settings.base_url.startswith("https://"),
     )
     app.state.settings = settings
     app.state.http = http or httpx.AsyncClient(timeout=30, headers={"Accept-Language": "fr-FR,fr;q=0.9"})
     app.state.providers = build_providers(settings, app.state.http)
-    app.state.tokens = TokenStore()
+    app.state.db = db or Database(Path(settings.data_dir) / "app.db")
+    app.state.tokens = TokenStore(app.state.db)
+    app.state.syncs = SyncStore(app.state.db)
     app.state.jobs = JobStore()
-    app.state.playlists: dict[str, tuple[str, Playlist]] = {}
+    app.state.playlists: dict[str, tuple[str, Playlist, PlaylistRef]] = {}
     app.state.tasks: set[asyncio.Task] = set()
 
     providers = app.state.providers
     tokens: TokenStore = app.state.tokens
+    syncs: SyncStore = app.state.syncs
     jobs: JobStore = app.state.jobs
+    runner = SyncRunner(
+        syncs, providers, tokens, settings.match_threshold, check_every=settings.sync_check_seconds
+    )
+    app.state.sync_runner = runner
 
     def sid(request: Request) -> str:
         if "sid" not in request.session:
@@ -186,7 +217,7 @@ def create_app(settings: Settings | None = None, http: httpx.AsyncClient | None 
         # On garde la playlist lue pour l'étape suivante (bornée pour la mémoire).
         if len(app.state.playlists) > 500:
             app.state.playlists.pop(next(iter(app.state.playlists)))
-        app.state.playlists[key] = (s, playlist)
+        app.state.playlists[key] = (s, playlist, ref)
         return {"key": key, "playlist": playlist.to_dict()}
 
     # ---------------------------------------------------------- recherche
@@ -196,7 +227,7 @@ def create_app(settings: Settings | None = None, http: httpx.AsyncClient | None 
         stored = app.state.playlists.get(body.playlist_key)
         if not stored or stored[0] != s:
             raise ProviderError("Playlist expirée, colle à nouveau le lien.", 404)
-        playlist = stored[1]
+        playlist, ref = stored[1], stored[2]
         target = provider_or_404(body.target)
         source = provider_or_404(playlist.platform)
         if not target.can_write():
@@ -204,7 +235,7 @@ def create_app(settings: Settings | None = None, http: httpx.AsyncClient | None 
         target_token = tokens.get(s, target.key)
         if target_token is None:
             raise AuthRequired(target.name)
-        job = jobs.create(s, target.key, playlist)
+        job = jobs.create(s, target.key, playlist, source_ref=ref)
         task = asyncio.create_task(
             run_matching(
                 job, source, target, tokens.get(s, source.key), target_token,
@@ -242,16 +273,127 @@ def create_app(settings: Settings | None = None, http: httpx.AsyncClient | None 
             raise AuthRequired(target.name)
         job.status = "creating"
         try:
-            url = await target.create_playlist(
-                body.name.strip() or job.playlist.name, body.description, ids, token
+            playlist_id, url = await target.create_empty(
+                body.name.strip() or job.playlist.name, body.description, token
             )
+            job.created_id, job.playlist_url = playlist_id, url
+            await target.add_tracks(playlist_id, ids, token)
         except ProviderError as exc:
             job.status = "error"
             job.error = exc.message
             raise
         job.status = "done"
-        job.playlist_url = url
-        return {"url": url, "added": len(ids)}
+        job.added_ids = ids
+        job.created_name = body.name.strip() or job.playlist.name
+        return {"url": url, "added": len(ids), "can_sync": job.source_ref is not None}
+
+    # ------------------------------------------------------ synchronisation
+    def require_ready(s: str, platform: str, role: str) -> None:
+        p = provider_or_404(platform)
+        if not p.can_write():
+            raise ProviderError(f"{p.name} n'est pas configuré : {p.write_setup_hint()}", 503)
+        if tokens.get(s, platform) is None:
+            raise AuthRequired(p.name, f"Connecte ton compte {p.name} ({role}) pour synchroniser.")
+
+    def own_sync(sync_id: str, s: str) -> Sync:
+        sync = syncs.get(sync_id)
+        if not sync or sync.sid != s:
+            raise ProviderError("Synchronisation introuvable.", 404)
+        return sync
+
+    @app.get("/api/syncs")
+    async def list_syncs(request: Request):
+        return [x.public() for x in syncs.for_session(sid(request))]
+
+    @app.post("/api/syncs")
+    async def create_sync(body: SyncFromJob, request: Request):
+        """Synchronise l'original et la copie qui vient d'être créée."""
+        s = sid(request)
+        _check_options(body.mode, body.interval_hours)
+        job = jobs.get(body.job_id, s)
+        if not job or not job.created_id or not job.source_ref:
+            raise ProviderError("Crée d'abord la copie de la playlist.", 409)
+        require_ready(s, job.target, "copie")
+        if body.mode == "two_way":
+            require_ready(s, job.source_ref.platform, "original")
+        added = set(job.added_ids)
+        keys_a = list(dict.fromkeys(track_key(t) for t in job.playlist.tracks))
+        pairs = [
+            [track_key(r.source), r.match.platform_id]
+            for r in job.results
+            if r and r.match and r.match.platform_id in added
+        ]
+        sync = Sync.new(
+            s,
+            Side(job.source_ref.platform, job.source_ref.playlist_id, job.playlist.url or job.source_ref.url,
+                 job.playlist.name, job.source_ref.storefront),
+            Side(job.target, job.created_id, job.playlist_url, job.created_name or job.playlist.name),
+            mode=body.mode,
+            interval_hours=body.interval_hours,
+            propagate_deletions=body.propagate_deletions,
+            snapshot_a=keys_a,
+            snapshot_b=list(job.added_ids),
+            pairs=pairs,
+        )
+        syncs.save(sync)
+        return sync.public()
+
+    @app.post("/api/syncs/link")
+    async def link_syncs(body: SyncFromLinks, request: Request):
+        """Relie deux playlists qui existent déjà. La 1re vérification les fusionne."""
+        s = sid(request)
+        _check_options(body.mode, body.interval_hours)
+        ref_a = await resolve_link(body.url_a, app.state.http)
+        ref_b = await resolve_link(body.url_b, app.state.http)
+        if (ref_a.platform, ref_a.playlist_id) == (ref_b.platform, ref_b.playlist_id):
+            raise ProviderError("Les deux liens pointent vers la même playlist.")
+        require_ready(s, ref_b.platform, "copie")
+        if body.mode == "two_way":
+            require_ready(s, ref_a.platform, "original")
+        pa, pb = provider_or_404(ref_a.platform), provider_or_404(ref_b.platform)
+        # Vérifie tout de suite que les deux playlists sont lisibles.
+        a = await pa.read_owned(ref_a, await pa.valid_token(tokens.get(s, ref_a.platform)))
+        b = await pb.read_owned(ref_b, await pb.valid_token(tokens.get(s, ref_b.platform)))
+        sync = Sync.new(
+            s,
+            Side(ref_a.platform, ref_a.playlist_id, a.url or ref_a.url, a.name, ref_a.storefront),
+            Side(ref_b.platform, ref_b.playlist_id, b.url or ref_b.url, b.name, ref_b.storefront),
+            mode=body.mode,
+            interval_hours=body.interval_hours,
+            propagate_deletions=body.propagate_deletions,
+        )
+        sync.next_run = 0  # première vérification dès que possible
+        syncs.save(sync)
+        return sync.public()
+
+    @app.patch("/api/syncs/{sync_id}")
+    async def update_sync(sync_id: str, body: SyncUpdate, request: Request):
+        s = sid(request)
+        sync = own_sync(sync_id, s)
+        _check_options(body.mode, body.interval_hours)
+        if body.mode == "two_way":
+            require_ready(s, sync.a.platform, "original")
+        for f in ("mode", "interval_hours", "propagate_deletions", "enabled"):
+            v = getattr(body, f)
+            if v is not None:
+                setattr(sync, f, v)
+        if body.interval_hours is not None or body.enabled:
+            base = sync.last_run or time.time()
+            sync.next_run = base + sync.interval_hours * 3600
+        syncs.save(sync)
+        return sync.public()
+
+    @app.post("/api/syncs/{sync_id}/run")
+    async def run_sync_now(sync_id: str, request: Request):
+        own_sync(sync_id, sid(request))
+        sync = await runner.run_one(sync_id)
+        return sync.public()
+
+    @app.delete("/api/syncs/{sync_id}")
+    async def delete_sync(sync_id: str, request: Request):
+        own_sync(sync_id, sid(request))
+        syncs.delete(sync_id)
+        return {"ok": True}
 
     return app
 

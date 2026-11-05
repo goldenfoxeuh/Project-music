@@ -76,6 +76,31 @@
         <button type="button" id="create-btn">Créer la playlist</button>
       </div>
       <div id="create-result" class="success" hidden></div>
+
+      <div id="sync-offer" class="sync-offer" hidden>
+        <h3>Garder les deux playlists à jour</h3>
+        <p class="muted">L'application vérifiera régulièrement les deux playlists et reportera les
+          morceaux ajoutés ou retirés.</p>
+        <div class="sync-form" data-form="job"></div>
+        <button type="button" id="sync-enable">Activer la synchronisation</button>
+      </div>
+    </section>
+
+    <!-- Synchronisations -->
+    <section class="card" id="step-syncs">
+      <h2><span class="num">↻</span> Mes synchronisations</h2>
+      <div id="sync-list"></div>
+      <details id="link-existing">
+        <summary>Relier deux playlists qui existent déjà</summary>
+        <div class="link-existing">
+          <input id="link-a" type="text" placeholder="Lien de la playlist d'origine">
+          <input id="link-b" type="text" placeholder="Lien de la copie (sur ton compte)">
+          <div class="sync-form" data-form="link"></div>
+          <p class="muted small-text">La première vérification fusionne les deux playlists :
+            les morceaux manquants sont ajoutés à la copie (et à l'original en mode « dans les deux sens »).</p>
+          <button type="button" id="link-btn">Relier et synchroniser</button>
+        </div>
+      </details>
     </section>
   </main>
 
@@ -83,6 +108,30 @@
     L'application copie la <em>liste</em> des morceaux (titres, artistes) et la recrée sur ton compte ;
     aucun fichier audio n'est téléchargé.
   </footer>
+
+  <template id="sync-form-tpl">
+    <div class="row options">
+      <label>Sens
+        <select name="mode">
+          <option value="one_way">Original → copie</option>
+          <option value="two_way">Dans les deux sens</option>
+        </select>
+      </label>
+      <label>Vérifier
+        <select name="interval_hours">
+          <option value="1">toutes les heures</option>
+          <option value="3">toutes les 3 h</option>
+          <option value="6" selected>toutes les 6 h</option>
+          <option value="12">toutes les 12 h</option>
+          <option value="24">une fois par jour</option>
+          <option value="72">tous les 3 jours</option>
+          <option value="168">une fois par semaine</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" name="propagate_deletions" checked> Reporter aussi les suppressions</label>
+    </div>
+    <p class="muted small-text mode-help"></p>
+  </template>
 
   <script src="/static/app.js"></script>
 </body>

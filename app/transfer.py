@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .matching import best_match
-from .models import Playlist, ProviderError, Track
+from .models import Playlist, PlaylistRef, ProviderError, Track
 from .providers.base import Provider, Tokens
 
 
@@ -42,6 +42,11 @@ class Job:
     error: str | None = None
     playlist_url: str | None = None
     created_at: float = field(default_factory=time.time)
+    # Pour pouvoir ensuite synchroniser l'original et la copie.
+    source_ref: PlaylistRef | None = None
+    created_id: str | None = None
+    created_name: str | None = None
+    added_ids: list[str] = field(default_factory=list)
 
     def to_dict(self, include_results: bool = True) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -53,6 +58,7 @@ class Job:
             "error": self.error,
             "playlist_url": self.playlist_url,
             "playlist_name": self.playlist.name,
+            "can_sync": bool(self.created_id and self.source_ref),
         }
         finished = [r for r in self.results if r]
         data["found"] = sum(1 for r in finished if r.match)
@@ -146,9 +152,14 @@ class JobStore:
         self.jobs: dict[str, Job] = {}
         self.ttl = ttl
 
-    def create(self, session_id: str, target: str, playlist: Playlist) -> Job:
+    def create(
+        self, session_id: str, target: str, playlist: Playlist, source_ref: PlaylistRef | None = None
+    ) -> Job:
         self._cleanup()
-        job = Job(id=uuid.uuid4().hex, session_id=session_id, target=target, playlist=playlist)
+        job = Job(
+            id=uuid.uuid4().hex, session_id=session_id, target=target, playlist=playlist,
+            source_ref=source_ref,
+        )
         self.jobs[job.id] = job
         return job
 

@@ -180,9 +180,7 @@ class DeezerProvider(Provider):
         return [t] if t else []
 
     # ------------------------------------------------------------ écriture
-    async def create_playlist(
-        self, name: str, description: str, track_ids: list[str], token: Tokens
-    ) -> str:
+    async def create_empty(self, name: str, description: str, token: Tokens) -> tuple[str, str]:
         token = await self.valid_token(token)
         if not token:
             raise AuthRequired("Deezer")
@@ -195,7 +193,22 @@ class DeezerProvider(Provider):
                 await self._api("POST", f"/playlist/{playlist_id}", token, description=description[:500])
             except ProviderError:
                 pass
+        return str(playlist_id), f"https://www.deezer.com/playlist/{playlist_id}"
+
+    async def add_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        token = await self.valid_token(token)
+        if not token:
+            raise AuthRequired("Deezer")
         for i in range(0, len(track_ids), 100):
             chunk = track_ids[i : i + 100]
             await self._api("POST", f"/playlist/{playlist_id}/tracks", token, songs=",".join(chunk))
-        return f"https://www.deezer.com/playlist/{playlist_id}"
+        return len(track_ids)
+
+    async def remove_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        token = await self.valid_token(token)
+        if not token:
+            raise AuthRequired("Deezer")
+        for i in range(0, len(track_ids), 100):
+            chunk = track_ids[i : i + 100]
+            await self._api("DELETE", f"/playlist/{playlist_id}/tracks", token, songs=",".join(chunk))
+        return len(track_ids)

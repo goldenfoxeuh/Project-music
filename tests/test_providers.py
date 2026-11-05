@@ -218,3 +218,21 @@ def test_parse_apple_page_schema_fallback():
     assert pl.tracks[0].title == "One"
     assert pl.tracks[0].artists == ["A"]
     assert pl.tracks[0].duration_ms == 180000
+
+
+async def test_spotify_remove_tracks_falls_back_to_old_endpoint():
+    seen = []
+
+    def handler(req):
+        seen.append((req.method, req.url.path, json.loads(req.content)))
+        if req.url.path.endswith("/items"):
+            return httpx.Response(404)
+        return httpx.Response(200, json={"snapshot_id": "s"})
+
+    async with client(handler) as http:
+        n = await SpotifyProvider(settings(), http).remove_tracks(
+            "pl", ["spotify:track:1"], {"access_token": "user"}
+        )
+    assert n == 1
+    assert seen[0] == ("DELETE", "/v1/playlists/pl/items", {"items": [{"uri": "spotify:track:1"}]})
+    assert seen[1] == ("DELETE", "/v1/playlists/pl/tracks", {"tracks": [{"uri": "spotify:track:1"}]})

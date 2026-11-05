@@ -27,6 +27,42 @@ retrouve chaque morceau sur cette plateforme et recrée la playlist sur ton comp
 
 Bonus : export de la playlist source en texte ou en CSV.
 
+## Synchronisation automatique ↻
+
+Une fois la copie créée, active **« Garder les deux playlists à jour »** : le serveur vérifie
+régulièrement les deux playlists (toutes les heures, 6 h, une fois par jour, par semaine…)
+et reporte les changements.
+
+- **Original → copie** : l'original sert de référence. Les morceaux ajoutés ou retirés de
+  l'original le sont aussi dans la copie ; ce que tu ajoutes à la main dans la copie est conservé.
+- **Dans les deux sens** : un morceau ajouté ou retiré dans l'une des deux playlists l'est aussi
+  dans l'autre. Il faut être connecté aux deux plateformes, et l'original doit t'appartenir.
+- **Reporter aussi les suppressions** : option à décocher si tu veux que la synchronisation
+  ne fasse qu'ajouter.
+
+Comment ça marche : à chaque vérification, l'application relit les deux playlists et les compare
+à la « photo » prise lors de la vérification précédente. Ce qui est apparu a été ajouté, ce qui a
+disparu a été retiré ; chaque changement est reporté de l'autre côté en retrouvant le morceau
+équivalent (ISRC puis recherche). Les correspondances déjà trouvées sont mémorisées pour ne pas
+refaire les recherches.
+
+Dans la section **Mes synchronisations** : résultat de la dernière vérification (+ / − morceaux),
+erreurs éventuelles, bouton « Synchroniser maintenant », changement de fréquence ou de sens,
+pause, suppression. Tu peux aussi **relier deux playlists qui existent déjà** : la première
+vérification les fusionne (sans doublons), puis elles restent synchronisées.
+
+Sécurités :
+- si plus de la moitié d'une playlist semble avoir disparu d'un coup (souvent une erreur de
+  lecture), les suppressions ne sont pas reportées et un avertissement s'affiche ;
+- Apple Music ne permet pas de retirer un morceau via son API : les suppressions à faire dans
+  une playlist Apple Music sont signalées pour que tu les fasses à la main ;
+- sur YouTube, chaque morceau ajouté ou retiré consomme du quota (≈ 190 opérations par jour).
+
+Les connexions aux comptes et les synchronisations sont enregistrées dans `data/app.db`
+(SQLite), pour continuer après un redémarrage du serveur. **Le serveur doit rester allumé** pour
+que les vérifications automatiques aient lieu (sur un ordinateur allumé, un Raspberry Pi ou un
+petit serveur en ligne).
+
 ## Ce que chaque plateforme permet
 
 | Plateforme     | Lire une playlist (source)                         | Créer une playlist (destination)        |
@@ -91,13 +127,16 @@ app/
   links.py         reconnaissance des liens de playlists
   matching.py      nettoyage des titres et score de ressemblance
   transfer.py      recherche de tous les morceaux sur la plateforme cible
+  sync.py          synchronisation périodique original <-> copie
+  storage.py       enregistrement des connexions et synchronisations (SQLite)
   providers/       une classe par plateforme (lecture, recherche, création)
     spotify.py  deezer.py  youtube.py  apple.py
 static/            interface (HTML / CSS / JavaScript)
 tests/             tests automatiques (HTTP simulé, aucun accès réseau)
 ```
 
-Ajouter une plateforme = écrire une classe `Provider` (voir `app/providers/base.py`),
+Ajouter une plateforme = écrire une classe `Provider` (voir `app/providers/base.py` :
+lecture, recherche, `create_empty`, `add_tracks`, `remove_tracks`),
 l'ajouter dans `app/providers/__init__.py` et reconnaître ses liens dans `app/links.py`.
 
 ## Tests
@@ -109,8 +148,8 @@ pytest
 
 ## Limites connues
 
-- Les connexions aux comptes sont gardées en mémoire : un redémarrage du serveur
-  demande de se reconnecter.
+- Les synchronisations sont liées au navigateur qui les a créées (cookie de session valable
+  un an) : ouvre l'application depuis ce même navigateur pour les gérer.
 - Un morceau absent du catalogue de la plateforme cible (exclusivité, restriction de pays)
   ne peut pas être ajouté ; il apparaît dans la liste des introuvables.
 - La lecture d'Apple Music sans clé passe par la page publique, dont le format peut changer.

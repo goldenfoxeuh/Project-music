@@ -52,11 +52,33 @@ class Provider:
         return []
 
     # ------------------------------------------------------------ écriture
+    # La plateforme sait retirer des morceaux d'une playlist (utile pour la synchronisation).
+    supports_remove: bool = True
+
+    async def create_empty(self, name: str, description: str, token: Tokens) -> tuple[str, str]:
+        """Crée une playlist vide et renvoie (identifiant, URL)."""
+        raise NotImplementedError
+
+    async def add_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        """Ajoute des morceaux à la fin d'une playlist existante, renvoie le nombre ajouté."""
+        raise NotImplementedError
+
+    async def remove_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        """Retire des morceaux d'une playlist existante, renvoie le nombre retiré."""
+        raise ProviderError(f"{self.name} ne permet pas de retirer des morceaux d'une playlist.")
+
     async def create_playlist(
         self, name: str, description: str, track_ids: list[str], token: Tokens
     ) -> str:
-        """Crée la playlist et renvoie son URL."""
-        raise NotImplementedError
+        """Crée la playlist avec ses morceaux et renvoie son URL."""
+        playlist_id, url = await self.create_empty(name, description, token)
+        if track_ids:
+            await self.add_tracks(playlist_id, track_ids, token)
+        return url
+
+    async def read_owned(self, ref: PlaylistRef, token: Tokens | None) -> Playlist:
+        """Lecture d'une playlist de l'utilisateur (peut être privée). Par défaut = read_playlist."""
+        return await self.read_playlist(ref, token)
 
     # --------------------------------------------------------------- OAuth
     def authorize_url(self, state: str) -> str:

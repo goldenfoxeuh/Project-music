@@ -220,15 +220,15 @@ class SpotifyProvider(Provider):
         return await self._search(f"isrc:{isrc}", token)
 
     # ------------------------------------------------------------ écriture
-    async def create_playlist(
-        self, name: str, description: str, track_ids: list[str], token: Tokens
-    ) -> str:
+    async def _user_headers(self, token: Tokens | None) -> dict:
         token = await self.valid_token(token)
         if not token:
             raise AuthRequired("Spotify")
-        headers = {"Authorization": f"Bearer {token['access_token']}"}
-        body = {"name": name, "description": description[:300], "public": False}
+        return {"Authorization": f"Bearer {token['access_token']}"}
 
+    async def create_empty(self, name: str, description: str, token: Tokens) -> tuple[str, str]:
+        headers = await self._user_headers(token)
+        body = {"name": name, "description": description[:300], "public": False}
         resp = await self.request("POST", f"{API}/me/playlists", json=body, headers=headers)
         if resp.status_code in (404, 405):
             me = await self.request("GET", f"{API}/me", headers=headers)
@@ -240,22 +240,36 @@ class SpotifyProvider(Provider):
             raise ProviderError(f"Spotify n'a pas pu créer la playlist : {resp.text}", 502)
         playlist = resp.json()
         playlist_id = playlist["id"]
-
-        path = "items"
-        for i in range(0, len(track_ids), 100):
-            chunk = track_ids[i : i + 100]
-            add = await self.request(
-                "POST", f"{API}/playlists/{playlist_id}/{path}", json={"uris": chunk}, headers=headers
-            )
-            if add.status_code in (404, 405) and path == "items":
-                path = "tracks"
-                add = await self.request(
-                    "POST", f"{API}/playlists/{playlist_id}/{path}", json={"uris": chunk}, headers=headers
-                )
-            if add.status_code not in (200, 201):
-                raise ProviderError(
-                    f"Spotify a refusé l'ajout des morceaux : {add.text}", 502
-                )
-        return (playlist.get("external_urls") or {}).get(
+        url = (playlist.get("external_urls") or {}).get(
             "spotify", f"https://open.spotify.com/playlist/{playlist_id}"
         )
+        return playlist_id, url
+
+    async def _items_call(self, method: str, playlist_id: str, new_body: dict, old_body: dict, headers: dict):
+        """Appelle /items (API 2026) et retombe sur /tracks (ancienne API) si besoin."""
+        resp = await self.request(
+            method, f"{API}/playlists/{playlist_id}/items", json=new_body, headers=headers
+        )
+        if resp.status_code in (404, 405):
+            resp = await self.request(
+                method, f"{API}/playlists/{playlist_id}/tracks", json=old_body, headers=headers
+            )
+        return resp
+
+    async def add_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        headers = await self._user_headers(token)
+        for i in range(0, len(track_ids), 100):
+            chunk = track_ids[i : i + 100]
+            add = await self._items_call("POST", playlist_id, {"uris": chunk}, {"uris": chunk}, headers)
+            if add.status_code not in (200, 201):
+                raise ProviderError(f"Spotify a refusé l'ajout des morceaux : {add.text}", 502)
+        return len(track_ids)
+
+    async def remove_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        headers = await self._user_headers(token)
+        for i in range(0, len(track_ids), 100):
+            chunk = [{"uri": u} for u in track_ids[i : i + 100]]
+            resp = await self._items_call("DELETE", playlist_id, {"items": chunk}, {"tracks": chunk}, headers)
+            if resp.status_code not in (200, 201):
+                raise ProviderError(f"Spotify a refusé la suppression des morceaux : {resp.text}", 502)
+        return len(track_ids)

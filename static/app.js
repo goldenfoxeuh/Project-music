@@ -221,6 +221,7 @@ async function startMatch() {
   $("#step-create").hidden = true;
   $("#match-summary").hidden = true;
   $("#create-result").hidden = true;
+  $("#sync-offer").hidden = true;
   $("#match-btn").disabled = true;
   try {
     let job = await api("/api/match", { method: "POST", body: { playlist_key: state.playlistKey, target: target.key } });
@@ -293,6 +294,7 @@ async function createPlaylist() {
     box.innerHTML = `✓ Playlist créée sur ${esc(platformName(job.target))} avec ${res.added} morceaux :<br>
       <a href="${esc(res.url)}" target="_blank" rel="noopener">${esc(res.url)}</a>`;
     memory.set("resume", null);
+    $("#sync-offer").hidden = !res.can_sync;
   } catch (e) {
     flash(e.message);
   } finally {
@@ -329,6 +331,208 @@ $("#export-csv").addEventListener("click", () => {
   download(`${state.playlist.name || "playlist"}.csv`, "﻿" + lines.join("\n"), "text/csv");
 });
 
+
+// ------------------------------------------------------------ synchronisation
+const MODE_HELP = {
+  one_way: "L'original est la référence : ce qui y est ajouté ou retiré est reporté dans la copie. Ce que tu ajoutes à la main dans la copie n'est pas touché.",
+  two_way: "Les changements faits dans l'une ou l'autre playlist sont reportés dans l'autre. Il faut être connecté aux deux plateformes.",
+};
+const INTERVAL_LABELS = { 1: "toutes les heures", 3: "toutes les 3 h", 6: "toutes les 6 h", 12: "toutes les 12 h", 24: "une fois par jour", 72: "tous les 3 jours", 168: "une fois par semaine" };
+
+function mountSyncForms() {
+  const tpl = $("#sync-form-tpl");
+  document.querySelectorAll(".sync-form").forEach((box) => {
+    box.appendChild(tpl.content.cloneNode(true));
+    const select = box.querySelector("[name=mode]");
+    const help = box.querySelector(".mode-help");
+    const update = () => { help.textContent = MODE_HELP[select.value]; };
+    select.addEventListener("change", update);
+    update();
+  });
+}
+
+function readSyncForm(name) {
+  const box = document.querySelector(`.sync-form[data-form="${name}"]`);
+  return {
+    mode: box.querySelector("[name=mode]").value,
+    interval_hours: Number(box.querySelector("[name=interval_hours]").value),
+    propagate_deletions: box.querySelector("[name=propagate_deletions]").checked,
+  };
+}
+
+function fillSyncForm(name, opts) {
+  const box = document.querySelector(`.sync-form[data-form="${name}"]`);
+  if (!box || !opts) return;
+  box.querySelector("[name=mode]").value = opts.mode;
+  box.querySelector("[name=interval_hours]").value = String(opts.interval_hours);
+  box.querySelector("[name=propagate_deletions]").checked = opts.propagate_deletions;
+  box.querySelector("[name=mode]").dispatchEvent(new Event("change"));
+}
+
+function relTime(ts) {
+  if (!ts) return "jamais";
+  const diff = Math.round((ts * 1000 - Date.now()) / 60000);
+  const abs = Math.abs(diff);
+  let txt;
+  if (abs < 1) return diff <= 0 ? "à l'instant" : "dans moins d'une minute";
+  if (abs < 60) txt = `${abs} min`;
+  else if (abs < 48 * 60) txt = `${Math.round(abs / 60)} h`;
+  else txt = `${Math.round(abs / 1440)} jours`;
+  return diff < 0 ? `il y a ${txt}` : `dans ${txt}`;
+}
+
+function sideHtml(side) {
+  const name = esc(side.name || "Playlist");
+  const link = side.url ? `<a href="${esc(side.url)}" target="_blank" rel="noopener">${name}</a>` : name;
+  return `<span class="badge ${esc(side.platform)}">${esc(platformName(side.platform))}</span> ${link}`;
+}
+
+function resultHtml(r) {
+  if (!r) return "";
+  const parts = [];
+  const list = (arr) => esc(arr.slice(0, 8).join(" · ") + (arr.length > 8 ? " …" : ""));
+  if (r.added_to_b.length) parts.push(`<span class="plus" title="${list(r.added_to_b)}">+${r.added_to_b.length} dans la copie</span>`);
+  if (r.removed_from_b.length) parts.push(`<span class="minus" title="${list(r.removed_from_b)}">−${r.removed_from_b.length} dans la copie</span>`);
+  if (r.added_to_a.length) parts.push(`<span class="plus" title="${list(r.added_to_a)}">+${r.added_to_a.length} dans l'original</span>`);
+  if (r.removed_from_a.length) parts.push(`<span class="minus" title="${list(r.removed_from_a)}">−${r.removed_from_a.length} dans l'original</span>`);
+  let html = `<div class="result">Dernier résultat : ${parts.length ? parts.join(" · ") : "aucun changement"}`;
+  if (r.not_found.length) html += ` · <span title="${list(r.not_found)}">${r.not_found.length} introuvable(s)</span>`;
+  html += "</div>";
+  for (const w of r.warnings || []) html += `<div class="warn">⚠ ${esc(w)}</div>`;
+  return html;
+}
+
+async function loadSyncs() {
+  let list = [];
+  try { list = await api("/api/syncs"); } catch { return; }
+  const box = $("#sync-list");
+  if (!list.length) {
+    box.innerHTML = `<p class="empty">Aucune synchronisation pour l'instant. Crée une copie ci-dessus puis active la synchronisation, ou relie deux playlists existantes.</p>`;
+    return;
+  }
+  box.innerHTML = list.map((x) => `
+    <div class="sync-item ${x.enabled ? "" : "paused"}" data-id="${esc(x.id)}">
+      <div class="pair">${sideHtml(x.a)} <span class="arrow">${x.mode === "two_way" ? "⇄" : "→"}</span> ${sideHtml(x.b)}</div>
+      <div class="info">${x.mode === "two_way" ? "Dans les deux sens" : "Original → copie"}
+        · ${esc(INTERVAL_LABELS[x.interval_hours] || `toutes les ${x.interval_hours} h`)}
+        · ${x.propagate_deletions ? "suppressions reportées" : "suppressions ignorées"}
+        · dernière vérification : ${relTime(x.last_run)}
+        ${x.enabled ? `· prochaine : ${relTime(x.next_run)}` : "· <strong>en pause</strong>"}</div>
+      ${x.last_error ? `<div class="err">✕ ${esc(x.last_error)}</div>` : resultHtml(x.last_result)}
+      <div class="actions">
+        <button type="button" class="secondary" data-act="run">Synchroniser maintenant</button>
+        <select data-act="interval" aria-label="Fréquence">
+          ${Object.entries(INTERVAL_LABELS).map(([v, l]) => `<option value="${v}" ${Number(v) === x.interval_hours ? "selected" : ""}>${l}</option>`).join("")}
+        </select>
+        <button type="button" class="secondary" data-act="mode">${x.mode === "two_way" ? "Passer en sens unique" : "Passer dans les deux sens"}</button>
+        <button type="button" class="secondary" data-act="toggle">${x.enabled ? "Mettre en pause" : "Reprendre"}</button>
+        <button type="button" class="secondary" data-act="delete">Supprimer</button>
+      </div>
+    </div>`).join("");
+}
+
+async function handleAuthError(e, retryKey, retryValue) {
+  flash(e.message);
+  if (!e.authRequired) return;
+  const p = state.platforms.find((x) => x.key === e.authRequired);
+  if (p && p.can_write && confirm(`${e.message}\n\nConnecter ${p.name} maintenant ?`)) {
+    if (retryKey) memory.set(retryKey, JSON.stringify(retryValue));
+    connect(p);
+  }
+}
+
+async function enableSync(payload) {
+  const btn = $("#sync-enable");
+  btn.disabled = true;
+  try {
+    await api("/api/syncs", { method: "POST", body: payload });
+    memory.set("pendingSync", null);
+    $("#sync-offer").hidden = true;
+    flash("Synchronisation activée : les deux playlists seront vérifiées automatiquement.", true);
+    await loadSyncs();
+    $("#step-syncs").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    await handleAuthError(e, "pendingSync", payload);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runSync(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Synchronisation…"; }
+  try {
+    const res = await api(`/api/syncs/${id}/run`, { method: "POST" });
+    if (res.last_error) flash(res.last_error);
+  } catch (e) {
+    flash(e.message);
+  }
+  await loadSyncs();
+}
+
+$("#sync-enable").addEventListener("click", () => {
+  if (!state.job) return;
+  enableSync({ job_id: state.job.id, ...readSyncForm("job") });
+});
+
+$("#link-btn").addEventListener("click", async () => {
+  const payload = { url_a: $("#link-a").value.trim(), url_b: $("#link-b").value.trim(), ...readSyncForm("link") };
+  if (!payload.url_a || !payload.url_b) return flash("Colle les deux liens.");
+  const btn = $("#link-btn");
+  btn.disabled = true;
+  btn.textContent = "Vérification…";
+  try {
+    const created = await api("/api/syncs/link", { method: "POST", body: payload });
+    memory.set("pendingLink", null);
+    $("#link-a").value = $("#link-b").value = "";
+    $("#link-existing").open = false;
+    await loadSyncs();
+    await runSync(created.id);
+    flash("Playlists reliées et synchronisées.", true);
+  } catch (e) {
+    await handleAuthError(e, "pendingLink", payload);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Relier et synchroniser";
+  }
+});
+
+$("#sync-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const item = btn.closest(".sync-item");
+  const id = item.dataset.id;
+  const act = btn.dataset.act;
+  try {
+    if (act === "run") return runSync(id, btn);
+    if (act === "delete") {
+      if (!confirm("Arrêter et supprimer cette synchronisation ? Les playlists ne sont pas supprimées.")) return;
+      await api(`/api/syncs/${id}`, { method: "DELETE" });
+    } else if (act === "toggle") {
+      await api(`/api/syncs/${id}`, { method: "PATCH", body: { enabled: item.classList.contains("paused") } });
+    } else if (act === "mode") {
+      const twoWay = btn.textContent.includes("deux sens");
+      await api(`/api/syncs/${id}`, { method: "PATCH", body: { mode: twoWay ? "two_way" : "one_way" } });
+    }
+  } catch (err) {
+    await handleAuthError(err);
+  }
+  await loadSyncs();
+});
+
+$("#sync-list").addEventListener("change", async (e) => {
+  if (e.target.dataset.act !== "interval") return;
+  const id = e.target.closest(".sync-item").dataset.id;
+  try {
+    await api(`/api/syncs/${id}`, { method: "PATCH", body: { interval_hours: Number(e.target.value) } });
+  } catch (err) {
+    flash(err.message);
+  }
+  await loadSyncs();
+});
+
+mountSyncForms();
+setInterval(loadSyncs, 60000);
+
 // ---------------------------------------------------------------- démarrage
 (async function init() {
   const params = new URLSearchParams(location.search);
@@ -341,6 +545,25 @@ $("#export-csv").addEventListener("click", () => {
     await loadPlatforms();
   } catch (e) {
     flash("Le serveur ne répond pas : " + e.message);
+    return;
+  }
+  await loadSyncs();
+  // Retour d'une connexion OAuth : on reprend une synchronisation en attente.
+  const parse = (k) => { try { return JSON.parse(memory.get(k) || "null"); } catch { return null; } };
+  const pendingSync = parse("pendingSync");
+  const pendingLink = parse("pendingLink");
+  if (pendingLink) {
+    memory.set("pendingLink", null);
+    $("#link-a").value = pendingLink.url_a;
+    $("#link-b").value = pendingLink.url_b;
+    fillSyncForm("link", pendingLink);
+    $("#link-existing").open = true;
+    if (params.get("connected")) $("#link-btn").click();
+  }
+  if (pendingSync && params.get("connected")) {
+    memory.set("pendingSync", null);
+    state.job = { id: pendingSync.job_id };
+    await enableSync(pendingSync);
     return;
   }
   // Retour d'une connexion OAuth : on reprend là où on en était.

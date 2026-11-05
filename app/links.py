@@ -75,6 +75,9 @@ def parse_link(url: str) -> PlaylistRef:
 
     # --- Apple Music : music.apple.com/fr/playlist/<nom>/pl.xxxxx
     if host in ("music.apple.com", "itunes.apple.com", "embed.music.apple.com"):
+        # Playlist de la bibliothèque perso : music.apple.com/library/playlist/p.xxxxx
+        if parts[:2] == ["library", "playlist"] and len(parts) >= 3 and parts[2].startswith("p."):
+            return PlaylistRef("apple", parts[2], url)
         storefront = parts[0] if parts and len(parts[0]) == 2 else "us"
         playlist_id = next((p for p in reversed(parts) if p.startswith("pl.")), None)
         if "playlist" in parts and playlist_id:

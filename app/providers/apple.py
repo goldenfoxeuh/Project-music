@@ -122,9 +122,48 @@ class AppleMusicProvider(Provider):
         )
 
     async def read_playlist(self, ref: PlaylistRef, token: Tokens | None) -> Playlist:
+        if ref.playlist_id.startswith("p."):
+            return await self._read_library(ref, token)
         if self.developer_token():
             return await self._read_api(ref, token)
         return await self._read_public_page(ref)
+
+    async def _read_library(self, ref: PlaylistRef, token: Tokens | None) -> Playlist:
+        """Playlist de la bibliothèque de l'utilisateur (ex : une copie créée par l'appli)."""
+        if not token or not token.get("music_user_token"):
+            raise AuthRequired("Apple Music")
+        headers = self._headers(token)
+        meta = await self.request("GET", f"{API}/v1/me/library/playlists/{ref.playlist_id}", headers=headers)
+        if meta.status_code in (401, 403):
+            raise AuthRequired("Apple Music", "Ta connexion Apple Music a expiré, reconnecte-toi.")
+        if meta.status_code != 200:
+            raise ProviderError("Playlist introuvable dans ta bibliothèque Apple Music.", 404)
+        attrs = (meta.json().get("data") or [{}])[0].get("attributes") or {}
+        tracks: list[Track] = []
+        url = f"{API}/v1/me/library/playlists/{ref.playlist_id}/tracks?limit=100"
+        while url:
+            resp = await self.request("GET", url, headers=headers)
+            if resp.status_code == 404:  # playlist vide
+                break
+            if resp.status_code != 200:
+                raise ProviderError(f"Erreur Apple Music ({resp.status_code}) : {resp.text}", 502)
+            body = resp.json()
+            for item in body.get("data") or []:
+                t = self._parse_song(item)
+                if t:
+                    # On compare les morceaux par leur identifiant du catalogue.
+                    catalog_id = ((item.get("attributes") or {}).get("playParams") or {}).get("catalogId")
+                    t.platform_id = catalog_id or t.platform_id
+                    tracks.append(t)
+            nxt = body.get("next")
+            url = f"{API}{nxt}" if nxt else None
+        return Playlist(
+            name=attrs.get("name") or "Playlist Apple Music",
+            description=(attrs.get("description") or {}).get("standard"),
+            url=ref.url,
+            platform=self.key,
+            tracks=tracks,
+        )
 
     async def _read_api(self, ref: PlaylistRef, token: Tokens | None) -> Playlist:
         storefront = ref.storefront or self._storefront(token)
@@ -215,38 +254,42 @@ class AppleMusicProvider(Provider):
         return [t for t in (self._parse_song(s) for s in resp.json().get("data") or []) if t]
 
     # ------------------------------------------------------------ écriture
-    async def create_playlist(
-        self, name: str, description: str, track_ids: list[str], token: Tokens
-    ) -> str:
+    # Apple Music ne permet pas de retirer un morceau d'une playlist via son API.
+    supports_remove = False
+
+    async def create_empty(self, name: str, description: str, token: Tokens) -> tuple[str, str]:
         if not token or not token.get("music_user_token"):
             raise AuthRequired("Apple Music")
-        headers = self._headers(token)
-        first, rest = track_ids[:100], track_ids[100:]
         resp = await self.request(
             "POST",
             f"{API}/v1/me/library/playlists",
-            json={
-                "attributes": {"name": name, "description": description[:500]},
-                "relationships": {"tracks": {"data": [{"id": i, "type": "songs"} for i in first]}},
-            },
-            headers=headers,
+            json={"attributes": {"name": name, "description": description[:500]}},
+            headers=self._headers(token),
         )
         if resp.status_code in (401, 403):
             raise AuthRequired("Apple Music", "Ta connexion Apple Music a expiré, reconnecte-toi.")
         if resp.status_code not in (200, 201):
             raise ProviderError(f"Apple Music n'a pas pu créer la playlist : {resp.text}", 502)
         playlist_id = resp.json()["data"][0]["id"]
-        for i in range(0, len(rest), 100):
-            chunk = rest[i : i + 100]
+        return playlist_id, f"https://music.apple.com/library/playlist/{playlist_id}"
+
+    async def add_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        if not token or not token.get("music_user_token"):
+            raise AuthRequired("Apple Music")
+        headers = self._headers(token)
+        for i in range(0, len(track_ids), 100):
+            chunk = track_ids[i : i + 100]
             add = await self.request(
                 "POST",
                 f"{API}/v1/me/library/playlists/{playlist_id}/tracks",
                 json={"data": [{"id": x, "type": "songs"} for x in chunk]},
                 headers=headers,
             )
+            if add.status_code in (401, 403):
+                raise AuthRequired("Apple Music", "Ta connexion Apple Music a expiré, reconnecte-toi.")
             if add.status_code not in (200, 201, 204):
                 raise ProviderError(f"Apple Music a refusé l'ajout des morceaux : {add.text}", 502)
-        return f"https://music.apple.com/library/playlist/{playlist_id}"
+        return len(track_ids)
 
 
 # ---------------------------------------------------------------------------

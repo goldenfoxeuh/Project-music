@@ -191,13 +191,21 @@ class YouTubeMusicProvider(Provider):
         return tracks
 
     # ------------------------------------------------------------ écriture
-    async def create_playlist(
-        self, name: str, description: str, track_ids: list[str], token: Tokens
-    ) -> str:
+    async def read_owned(self, ref: PlaylistRef, token: Tokens | None) -> Playlist:
+        # Les playlists créées par l'appli sont privées : on passe par l'API officielle.
+        token = await self.valid_token(token)
+        if token:
+            return await self._read_with_data_api(ref, token)
+        return await self.read_playlist(ref, token)
+
+    async def _user_headers(self, token: Tokens | None) -> dict:
         token = await self.valid_token(token)
         if not token:
             raise AuthRequired("YouTube Music")
-        headers = {"Authorization": f"Bearer {token['access_token']}"}
+        return {"Authorization": f"Bearer {token['access_token']}"}
+
+    async def create_empty(self, name: str, description: str, token: Tokens) -> tuple[str, str]:
+        headers = await self._user_headers(token)
         resp = await self.request(
             "POST",
             f"{YT_API}/playlists",
@@ -211,7 +219,11 @@ class YouTubeMusicProvider(Provider):
         if resp.status_code not in (200, 201):
             raise ProviderError(_google_error("créer la playlist", resp), 502)
         playlist_id = resp.json()["id"]
+        return playlist_id, f"https://music.youtube.com/playlist?list={playlist_id}"
 
+    async def add_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        headers = await self._user_headers(token)
+        added = 0
         for video_id in track_ids:
             add = await self.request(
                 "POST",
@@ -225,16 +237,46 @@ class YouTubeMusicProvider(Provider):
                 },
                 headers=headers,
             )
-            if add.status_code not in (200, 201):
-                if "quotaExceeded" in add.text:
-                    raise ProviderError(
-                        "Quota YouTube du jour épuisé : la playlist a été créée mais "
-                        "incomplète. Relance demain pour le reste.",
-                        429,
-                    )
-                # Une vidéo indisponible ne doit pas bloquer tout le transfert.
-                continue
-        return f"https://music.youtube.com/playlist?list={playlist_id}"
+            if add.status_code in (200, 201):
+                added += 1
+            elif "quotaExceeded" in add.text:
+                raise ProviderError(
+                    f"Quota YouTube du jour épuisé après {added} morceaux ajoutés. "
+                    "Relance demain pour le reste.",
+                    429,
+                )
+            # Une vidéo indisponible ne doit pas bloquer tout le transfert.
+        return added
+
+    async def remove_tracks(self, playlist_id: str, track_ids: list[str], token: Tokens) -> int:
+        headers = await self._user_headers(token)
+        wanted = set(track_ids)
+        # YouTube supprime par identifiant d'élément de playlist, pas par vidéo.
+        item_ids: list[str] = []
+        page_token = None
+        while True:
+            params = {"part": "snippet", "playlistId": playlist_id, "maxResults": 50}
+            if page_token:
+                params["pageToken"] = page_token
+            resp = await self.request("GET", f"{YT_API}/playlistItems", params=params, headers=headers)
+            if resp.status_code != 200:
+                raise ProviderError(_google_error("lire la playlist", resp), 502)
+            body = resp.json()
+            for item in body.get("items") or []:
+                vid = ((item.get("snippet") or {}).get("resourceId") or {}).get("videoId")
+                if vid in wanted:
+                    item_ids.append(item["id"])
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                break
+        removed = 0
+        for item_id in item_ids:
+            resp = await self.request("DELETE", f"{YT_API}/playlistItems", params={"id": item_id}, headers=headers)
+            if resp.status_code in (200, 204):
+                removed += 1
+            elif "quotaExceeded" in resp.text:
+                raise ProviderError("Quota YouTube du jour épuisé, la suite se fera à la prochaine vérification.", 429)
+        return removed
 
 
 def _google_error(action: str, resp) -> str:

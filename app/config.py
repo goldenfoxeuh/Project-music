@@ -40,6 +40,12 @@ class Settings:
     apple_private_key_path: str = field(default_factory=lambda: _env("APPLE_PRIVATE_KEY_PATH"))
     apple_storefront: str = field(default_factory=lambda: _env("APPLE_STOREFRONT", "fr").lower())
 
+    # Dossier où sont enregistrées les connexions et les synchronisations (SQLite).
+    data_dir: str = field(default_factory=lambda: _env("DATA_DIR", "data"))
+    # Synchronisation automatique : active ou non, et fréquence de vérification de l'échéancier.
+    sync_enabled: bool = field(default_factory=lambda: _env("SYNC_ENABLED", "1") not in ("0", "false", "no"))
+    sync_check_seconds: float = field(default_factory=lambda: float(_env("SYNC_CHECK_SECONDS", "60")))
+
     # Score minimum (0-100) pour considérer qu'un morceau est trouvé.
     match_threshold: float = field(default_factory=lambda: float(_env("MATCH_THRESHOLD", "70")))
 

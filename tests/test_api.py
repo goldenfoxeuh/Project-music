@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.storage import Database
 
 DEEZER_TRACKS = [
     {"id": 1, "type": "track", "title": "Alors on danse", "duration": 206,
@@ -58,7 +59,7 @@ def test_full_transfer_flow():
     s.secret_key = "test"
     created: dict = {}
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler(created)))
-    app = create_app(s, http)
+    app = create_app(s, http, Database(":memory:"))
 
     with TestClient(app) as c:
         platforms = {p["key"]: p for p in c.get("/api/platforms").json()}
@@ -94,15 +95,30 @@ def test_full_transfer_flow():
             "job_id": job["id"], "name": "Copie", "track_ids": ["spotify:track:sp1", "spotify:track:forged"],
         })
         assert r.status_code == 200, r.text
-        assert r.json() == {"url": "https://open.spotify.com/playlist/np", "added": 1}
+        assert r.json() == {"url": "https://open.spotify.com/playlist/np", "added": 1, "can_sync": True}
         assert created["uris"] == ["spotify:track:sp1"]
         assert created["body"]["name"] == "Copie"
+
+        # Active la synchronisation de l'original vers la copie.
+        r = c.post("/api/syncs", json={"job_id": job["id"], "mode": "one_way", "interval_hours": 6})
+        assert r.status_code == 200, r.text
+        sync = r.json()
+        assert sync["a"]["platform"] == "deezer" and sync["b"]["platform"] == "spotify"
+        assert sync["tracks_a"] == 2 and sync["tracks_b"] == 1
+        # Deux sens : il faut aussi être connecté à Deezer (non configuré ici).
+        r = c.post("/api/syncs", json={"job_id": job["id"], "mode": "two_way"})
+        assert r.status_code in (401, 503)
+        assert [x["id"] for x in c.get("/api/syncs").json()] == [sync["id"]]
+        r = c.patch(f"/api/syncs/{sync['id']}", json={"enabled": False, "interval_hours": 24})
+        assert r.json()["enabled"] is False and r.json()["interval_hours"] == 24
+        assert c.delete(f"/api/syncs/{sync['id']}").json() == {"ok": True}
+        assert c.get("/api/syncs").json() == []
 
 
 def test_unknown_link_returns_message():
     s = Settings()
     s.secret_key = "test"
-    app = create_app(s, httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))))
+    app = create_app(s, httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))), Database(":memory:"))
     with TestClient(app) as c:
         r = c.post("/api/playlist", json={"url": "https://example.com/x"})
         assert r.status_code == 400

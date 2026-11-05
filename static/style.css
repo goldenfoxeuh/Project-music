@@ -116,6 +116,35 @@ summary { cursor: pointer; color: var(--accent); }
 .score.mid { color: var(--warn); }
 .score.low { color: var(--bad); }
 
+.sync-offer { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.sync-offer h3 { font-size: 16px; }
+.options { margin: 10px 0 4px; gap: 14px; }
+.options label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.options label.check { flex-direction: row; color: var(--text); font-size: 14px; flex: 0 1 auto; }
+select {
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 14px;
+}
+.small-text { font-size: 13px; margin: 4px 0 12px; }
+.link-existing { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.link-existing input { flex: none; }
+
+.sync-item { border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 10px; }
+.sync-item.paused { opacity: .65; }
+.sync-item .pair { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+.sync-item .pair a { color: inherit; text-decoration: none; }
+.sync-item .pair a:hover { text-decoration: underline; }
+.sync-item .arrow { color: var(--muted); font-weight: 400; }
+.sync-item .info { font-size: 13px; color: var(--muted); margin: 6px 0; }
+.sync-item .result { font-size: 13px; margin: 6px 0; }
+.sync-item .result .plus { color: var(--ok); }
+.sync-item .result .minus { color: var(--bad); }
+.sync-item .err { font-size: 13px; color: var(--bad); margin: 6px 0; }
+.sync-item .warn { font-size: 13px; color: var(--warn); margin: 6px 0; }
+.sync-item .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.sync-item .actions select { padding: 6px 8px; font-size: 13px; }
+.empty { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+
 @media (max-width: 600px) {
   .matches thead { display: none; }
   .matches tr { display: grid; grid-template-columns: 28px 1fr; gap: 2px 6px; padding: 8px 0; border-bottom: 1px solid var(--border); }
