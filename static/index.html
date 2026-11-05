@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Playlist Transfer</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Playlist Transfer</h1>
+    <p class="subtitle">Copie une playlist d'une plateforme à une autre :
+      Spotify, Deezer, YouTube Music, Apple Music.</p>
+  </header>
+
+  <main>
+    <div id="flash" class="flash" hidden></div>
+
+    <!-- Étape 1 : le lien -->
+    <section class="card" id="step-source">
+      <h2><span class="num">1</span> Colle le lien de la playlist</h2>
+      <form id="link-form" class="row">
+        <input id="link" type="text" autocomplete="off" required
+               placeholder="https://open.spotify.com/playlist/… · deezer.com/playlist/… · music.youtube.com/playlist?list=… · music.apple.com/…/playlist/…">
+        <button type="submit" id="read-btn">Analyser</button>
+      </form>
+      <div id="source-result" hidden>
+        <div class="playlist-head">
+          <img id="pl-image" alt="" hidden>
+          <div>
+            <div class="badge" id="pl-platform"></div>
+            <h3 id="pl-name"></h3>
+            <p class="muted" id="pl-meta"></p>
+          </div>
+        </div>
+        <details>
+          <summary>Voir les morceaux</summary>
+          <ol id="pl-tracks" class="tracklist"></ol>
+        </details>
+        <div class="row small">
+          <button type="button" class="secondary" id="export-txt">Copier la liste (texte)</button>
+          <button type="button" class="secondary" id="export-csv">Télécharger en CSV</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Étape 2 : la destination -->
+    <section class="card" id="step-target" hidden>
+      <h2><span class="num">2</span> Choisis la plateforme de destination</h2>
+      <div id="targets" class="targets"></div>
+      <button type="button" id="match-btn" disabled>Rechercher les morceaux</button>
+    </section>
+
+    <!-- Étape 3 : vérification -->
+    <section class="card" id="step-match" hidden>
+      <h2><span class="num">3</span> Vérifie les correspondances</h2>
+      <div class="progress"><div id="progress-bar"></div></div>
+      <p id="progress-text" class="muted"></p>
+      <div id="match-summary" hidden>
+        <div class="row small">
+          <label class="check"><input type="checkbox" id="only-missing"> Afficher seulement les introuvables</label>
+          <button type="button" class="secondary" id="copy-missing">Copier les introuvables</button>
+        </div>
+        <table class="matches">
+          <thead><tr><th></th><th>Original</th><th>Trouvé</th><th>Fiabilité</th></tr></thead>
+          <tbody id="match-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Étape 4 : création -->
+    <section class="card" id="step-create" hidden>
+      <h2><span class="num">4</span> Crée la playlist</h2>
+      <div class="row">
+        <input id="new-name" type="text" placeholder="Nom de la nouvelle playlist">
+        <button type="button" id="create-btn">Créer la playlist</button>
+      </div>
+      <div id="create-result" class="success" hidden></div>
+    </section>
+  </main>
+
+  <footer class="muted">
+    L'application copie la <em>liste</em> des morceaux (titres, artistes) et la recrée sur ton compte ;
+    aucun fichier audio n'est téléchargé.
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
